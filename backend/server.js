@@ -41,6 +41,13 @@ app.get("/api/health", (_req, res) => {
   res.json({ success: true, message: "KPPSC API is running." });
 });
 
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "KPPSC Backend API is running",
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 
 if (require.main === module) {
