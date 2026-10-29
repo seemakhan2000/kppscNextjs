@@ -255,66 +255,97 @@ export default function FinalProfileContent() {
     };
   }, [showToast]);
 
-  async function handleSaveProfile() {
-    setIsSaving(true);
+async function handleSaveProfile() {
+  if (isSaving) return;
+
+  setIsSaving(true);
+
+  try {
+    if (!API_BASE_URL) {
+      throw new Error(
+        "Backend URL missing. Set NEXT_PUBLIC_API_BASE_URL in Vercel."
+      );
+    }
+
+    const currentCnic = localStorage.getItem("currentUser");
+    const rawData = localStorage.getItem("finalProfileData");
+
+    if (!rawData) {
+      throw new Error(
+        "Profile data not found. Please complete your profile first."
+      );
+    }
+
+    const finalData: AnyRecord = JSON.parse(rawData);
+
+    if (!finalData.profile?.cnic) {
+      throw new Error("Profile CNIC is missing.");
+    }
+
+    if (
+      currentCnic &&
+      String(finalData.profile.cnic) !== String(currentCnic)
+    ) {
+      throw new Error(
+        "Saved profile CNIC does not match the logged-in user."
+      );
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/profile/saveProfile`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(finalData),
+      }
+    );
+
+    const responseText = await response.text();
+
+    let result: AnyRecord;
 
     try {
-      const rawData = localStorage.getItem("finalProfileData");
-      const finalData: AnyRecord = rawData ? JSON.parse(rawData) : {};
-
-      if (!finalData.profile?.cnic) {
-        showToast("Profile information or CNIC is missing.", "error");
-        return;
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/profile/saveProfile`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(finalData),
-        }
+      result = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      throw new Error(
+        `Backend returned an invalid response (HTTP ${response.status}). Verify the backend deployment and API route.`
       );
-
-      const responseText = await response.text();
-
-      let result: AnyRecord = {};
-
-      try {
-        result = JSON.parse(responseText);
-      } catch {
-        throw new Error(
-          `Server returned an invalid response (${response.status}). Check the backend terminal.`
-        );
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          result.error || result.message || "Failed to save profile."
-        );
-      }
-
-      showToast("Profile saved successfully!", "success");
-
-      localStorage.removeItem("finalProfileData");
-
-      window.setTimeout(() => {
-        router.push("/");
-      }, 800);
-    } catch (error) {
-      console.error("Failed to save profile:", error);
-      showToast(
-        error instanceof Error
-          ? error.message
-          : "Failed to save profile.",
-        "error"
-      );
-    } finally {
-      setIsSaving(false);
     }
+
+    if (!response.ok) {
+      throw new Error(
+        result.message ||
+          result.error ||
+          `Unable to save profile (HTTP ${response.status}).`
+      );
+    }
+
+    showToast(
+      result.message || "Profile saved successfully!",
+      "success"
+    );
+
+    localStorage.removeItem("finalProfileData");
+
+    window.setTimeout(() => {
+      router.push("/");
+    }, 800);
+  } catch (error) {
+    console.error("Failed to save profile:", error);
+
+    showToast(
+      error instanceof Error
+        ? error.message
+        : "Failed to save profile. Please try again.",
+      "error"
+    );
+  } finally {
+    setIsSaving(false);
   }
+}
+
 
   const valueFor = (key: string) => {
     const value = profileData[key];

@@ -1,95 +1,187 @@
-const Profile = require('../models/Profile');
-const Photo = require('../models/photo');
+
+const Profile = require("../models/Profile");
+const Photo = require("../models/photo");
+
 const saveProfile = async (req, res) => {
   try {
-    const { profile, education, experience } = req.body;
+    const { profile, education = [], experience = [] } = req.body;
 
     if (!profile || !profile.cnic) {
-      return res.status(400).json({ message: 'CNIC is required.' });
+      return res.status(400).json({
+        success: false,
+        message: "Profile CNIC is required.",
+      });
     }
 
-    const cnic = profile.cnic;
-    const existing = await Profile.findOne({ cnic });
-    if (existing) {
-      return res.status(400).json({ message: 'Profile with this CNIC already exists.' });
+    if (!Array.isArray(education) || !Array.isArray(experience)) {
+      return res.status(400).json({
+        success: false,
+        message: "Education and experience must be arrays.",
+      });
     }
 
-    
-    const newProfile = new Profile({
-      cnic,
-      profile,
-      education: education || [],
-      experience: experience || [],
-       status: 'Pending'
+    const cnic = String(profile.cnic).trim();
+
+    const savedProfile = await Profile.findOneAndUpdate(
+      { cnic },
+      {
+        $set: {
+          profile: { ...profile, cnic },
+          education,
+          experience,
+        },
+        $setOnInsert: {
+          cnic,
+          status: "Pending",
+        },
+      },
+      {
+        new: true,
+        upsert: true,
+        runValidators: true,
+        setDefaultsOnInsert: true,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile saved successfully.",
+      profile: savedProfile,
     });
-
-    await newProfile.save();
-    res.status(201).json({ message: 'Profile saved successfully', profile: newProfile });
-
   } catch (error) {
+    console.error("saveProfile error:", error);
+
     if (error.code === 11000) {
-      return res.status(400).json({ message: 'Profile with this CNIC already exists.' });
+      return res.status(409).json({
+        success: false,
+        message: "A profile with this CNIC already exists.",
+      });
     }
-    res.status(500).json({ message: 'Server error' });
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to save profile.",
+    });
   }
 };
 
 const getProfileByCnic = async (req, res) => {
   try {
-    const { cnic } = req.params;
-    if (!cnic) return res.status(400).json({ message: 'CNIC is required' });
+    const cnic = String(req.params.cnic || "").trim();
+
+    if (!cnic) {
+      return res.status(400).json({
+        success: false,
+        message: "CNIC is required.",
+      });
+    }
 
     const profile = await Profile.findOne({ cnic });
-    if (!profile) return res.status(404).json({ message: 'Profile not found' });
 
-    res.json(profile);
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found.",
+      });
+    }
+
+    return res.status(200).json(profile);
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    console.error("getProfileByCnic error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve profile.",
+    });
   }
 };
-
 
 const getAllProfiles = async (req, res) => {
   try {
     const profiles = await Profile.find().sort({ _id: -1 });
-    res.json(profiles);
+
+    return res.status(200).json(profiles);
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    console.error("getAllProfiles error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve profiles.",
+    });
   }
 };
 
 const updateStatus = async (req, res) => {
   try {
-    const { cnic } = req.params;
+    const cnic = String(req.params.cnic || "").trim();
     const { status } = req.body;
 
-    const profile = await Profile.findOneAndUpdate({ cnic }, { status }, { new: true });
-    if (!profile) return res.status(404).json({ message: 'Profile not found' });
-
-    res.json(profile);
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-const deleteProfile = async (req, res) => {
-  try {
-    const { cnic } = req.params;
-
-    const deletedProfile = await Profile.findOneAndDelete({ cnic });
-    if (!deletedProfile) return res.status(404).json({ message: 'Profile not found' });
-    const photo = await Photo.findOne({ cnic });
-    if (photo) {
-      const filePath = path.join(__dirname, '../', photo.url);
-      fs.unlink(filePath, err => { if (err) console.error(err); });
-      await Photo.deleteOne({ cnic });
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        message: "Status is required.",
+      });
     }
 
-    res.json({ message: 'Profile and photo deleted successfully' });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    const profile = await Profile.findOneAndUpdate(
+      { cnic },
+      { $set: { status } },
+      { new: true, runValidators: true }
+    );
+
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found.",
+      });
+    }
+
+    return res.status(200).json(profile);
+  } catch (error) {
+    console.error("updateStatus error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update profile status.",
+    });
   }
 };
 
-module.exports = { saveProfile, getAllProfiles, getProfileByCnic, updateStatus, deleteProfile };
+const deleteProfile = async (req, res) => {
+  try {
+    const cnic = String(req.params.cnic || "").trim();
 
+    const deletedProfile = await Profile.findOneAndDelete({ cnic });
 
+    if (!deletedProfile) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found.",
+      });
+    }
+
+    // Delete the photo database record.
+    // Do not use fs.unlink for Cloudinary URLs.
+    await Photo.deleteOne({ cnic });
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile deleted successfully.",
+    });
+  } catch (error) {
+    console.error("deleteProfile error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to delete profile.",
+    });
+  }
+};
+
+module.exports = {
+  saveProfile,
+  getAllProfiles,
+  getProfileByCnic,
+  updateStatus,
+  deleteProfile,
+};
