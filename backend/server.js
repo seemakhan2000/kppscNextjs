@@ -21,27 +21,32 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
+  "https://kppsc-nextjs-z619.vercel.app",
   process.env.FRONTEND_URL,
   process.env.FRONTEND_URL_PREVIEW,
 ].filter(Boolean);
 
+// CORS configuration
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without Origin, e.g. server-to-server requests
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests without an Origin header
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+    console.error("CORS blocked origin:", origin);
+    return callback(new Error("Origin not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
 
-      console.error("CORS blocked origin:", origin);
-      return callback(new Error("Origin not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+// CORS must run before API routes
+app.use(cors(corsOptions));
+
+// Explicitly handle preflight requests
+app.options(/.*/, cors(corsOptions));
 
 // Parse request bodies
 app.use(express.json());
@@ -59,7 +64,7 @@ app.get("/", (req, res) => {
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
-    message: "KPPSC API is running.",
+    message: "KPPSC API is running",
   });
 });
 
@@ -73,7 +78,7 @@ app.use("/api/ads", advertisementRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/schedules", scheduleRoutes);
 
-// Handle unknown routes
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -81,7 +86,7 @@ app.use((req, res) => {
   });
 });
 
-// Error handler
+// Central error handler
 app.use((err, req, res, next) => {
   console.error("API Error:", err.message);
 
@@ -96,7 +101,7 @@ app.use((err, req, res, next) => {
     });
   }
 
-  res.status(err.status || 500).json({
+  return res.status(err.status || 500).json({
     success: false,
     message:
       process.env.NODE_ENV === "production"
@@ -106,14 +111,16 @@ app.use((err, req, res, next) => {
 });
 
 // Connect to MongoDB
-connectDB();
+connectDB().catch((error) => {
+  console.error("MongoDB connection failed:", error.message);
+});
 
-// Local development server
+// Start server only in local development
 const PORT = process.env.PORT || 5000;
 
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`KPPSC server running on port ${PORT}`);
   });
 }
 
