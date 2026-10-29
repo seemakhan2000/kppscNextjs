@@ -1,12 +1,16 @@
 
 "use client";
 
+"use client";
+
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
 const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL || ""
+  process.env.NEXT_PUBLIC_API_URL || ""
 ).replace(/\/+$/, "");
+
 type AnyRecord = Record<string, any>;
 
 type ToastState = {
