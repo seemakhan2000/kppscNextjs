@@ -3,11 +3,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-
 const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000"
-).replace(/\/$/, "");
-
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"
+).replace(/\/+$/, "");
 const navigationItems = [
   { label: "1: Complete Your Profile", href: "/profile" },
   { label: "2: Add Education", href: "/add-education" },
