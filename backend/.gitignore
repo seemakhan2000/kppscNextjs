@@ -1,0 +1,9 @@
+# Dependencies
+node_modules/
+
+# Environment variables (Security ke liye zaroori hai)
+.env
+uploads
+
+# Logs
+logs
