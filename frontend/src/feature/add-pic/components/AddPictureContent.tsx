@@ -1,11 +1,18 @@
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import Link from "next/link";
+
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"
 ).replace(/\/+$/, "");
+
 const navigationItems = [
   { label: "1: Complete Your Profile", href: "/profile" },
   { label: "2: Add Education", href: "/add-education" },
@@ -21,13 +28,22 @@ type ToastState = {
   type: ToastType;
 } | null;
 
-type ProfileData = {
-  profile?: {
-    cnic?: string;
-    photo?: string;
-    [key: string]: unknown;
-  };
+type Profile = {
+  cnic?: string;
+  photo?: string;
   [key: string]: unknown;
+};
+
+type ProfileData = {
+  profile?: Profile;
+  [key: string]: unknown;
+};
+
+type UploadResponse = {
+  success?: boolean;
+  message?: string;
+  error?: string;
+  photo?: string | null;
 };
 
 export default function AddPictureContent() {
@@ -41,6 +57,7 @@ export default function AddPictureContent() {
   const [isReady, setIsReady] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
 
+  // Load the existing photo from localStorage.
   useEffect(() => {
     try {
       const stored = localStorage.getItem("finalProfileData");
@@ -49,7 +66,10 @@ export default function AddPictureContent() {
         const profileData = JSON.parse(stored) as ProfileData;
         const existingPhoto = profileData.profile?.photo;
 
-        if (existingPhoto) {
+        if (
+          typeof existingPhoto === "string" &&
+          existingPhoto.trim()
+        ) {
           setPreviewImage(existingPhoto);
         }
       }
@@ -62,24 +82,30 @@ export default function AddPictureContent() {
     return () => {
       if (previewUrlRef.current) {
         URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
       }
     };
   }, []);
 
+  // Automatically hide toast notifications.
   useEffect(() => {
     if (!toast) return;
 
-    const timer = window.setTimeout(() => setToast(null), 4000);
+    const timer = window.setTimeout(() => {
+      setToast(null);
+    }, 4000);
+
     return () => window.clearTimeout(timer);
   }, [toast]);
 
   function handleFileChange(
-    event: React.ChangeEvent<HTMLInputElement>
+    event: ChangeEvent<HTMLInputElement>
   ) {
     const file = event.target.files?.[0];
 
     if (!file) return;
 
+    // Allow image files only.
     if (!file.type.startsWith("image/")) {
       setToast({
         message: "Only image files are allowed.",
@@ -92,19 +118,38 @@ export default function AddPictureContent() {
       return;
     }
 
+    // Limit image size to 5 MB.
+    if (file.size > 5 * 1024 * 1024) {
+      setToast({
+        message: "Image size must not exceed 5 MB.",
+        type: "error",
+      });
+
+      event.target.value = "";
+      setSelectedFile(null);
+      setUploadStatus("");
+      return;
+    }
+
+    // Release the previous local preview URL.
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
     }
 
     const localPreviewUrl = URL.createObjectURL(file);
 
     previewUrlRef.current = localPreviewUrl;
+
     setSelectedFile(file);
     setPreviewImage(localPreviewUrl);
     setUploadStatus("");
+    setToast(null);
   }
 
   async function handleUpload() {
+    if (isUploading) return;
+
     if (!selectedFile) {
       setToast({
         message: "Please select a photo first.",
@@ -118,13 +163,21 @@ export default function AddPictureContent() {
     try {
       const rawData = localStorage.getItem("finalProfileData");
 
-      storedData = rawData ? JSON.parse(rawData) : {};
+      if (!rawData) {
+        setToast({
+          message: "Profile data not found. Please complete your profile first.",
+          type: "error",
+        });
+        return;
+      }
 
-      const cnic = storedData.profile?.cnic;
+      storedData = JSON.parse(rawData) as ProfileData;
+
+      const cnic = storedData.profile?.cnic?.trim();
 
       if (!cnic) {
         setToast({
-          message: "CNIC not found in profile.",
+          message: "CNIC not found in your profile.",
           type: "error",
         });
         return;
@@ -144,25 +197,48 @@ export default function AddPictureContent() {
         }
       );
 
-      const data = await response.json();
+      // Handle non-JSON responses safely.
+      const responseText = await response.text();
 
-      if (!response.ok) {
+      let data: UploadResponse;
+
+      try {
+        data = JSON.parse(responseText) as UploadResponse;
+      } catch {
         throw new Error(
-          data.message || data.error || "Error uploading photo."
+          response.ok
+            ? "The server returned an invalid response."
+            : `Upload failed with HTTP ${response.status}. Check the backend route and server logs.`
         );
       }
 
-      if (!data.photo || typeof data.photo !== "string") {
-        throw new Error("The server did not return a photo URL.");
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            data.error ||
+            `Photo upload failed with HTTP ${response.status}.`
+        );
       }
 
+      if (
+        typeof data.photo !== "string" ||
+        !data.photo.trim()
+      ) {
+        throw new Error(
+          data.message || "The server did not return a photo URL."
+        );
+      }
+
+      // Cloudinary normally returns a complete HTTPS URL.
       const imageURL = /^https?:\/\//i.test(data.photo)
         ? data.photo
         : `${API_BASE_URL}${data.photo.startsWith("/") ? "" : "/"}${data.photo}`;
 
+      // Preserve the latest profile data in localStorage.
       const latestRaw = localStorage.getItem("finalProfileData");
+
       const latestData: ProfileData = latestRaw
-        ? JSON.parse(latestRaw)
+        ? (JSON.parse(latestRaw) as ProfileData)
         : storedData;
 
       latestData.profile = {
@@ -176,6 +252,12 @@ export default function AddPictureContent() {
         JSON.stringify(latestData)
       );
 
+      // Release the temporary preview URL.
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
+      }
+
       setPreviewImage(imageURL);
       setSelectedFile(null);
 
@@ -183,12 +265,9 @@ export default function AddPictureContent() {
         fileInputRef.current.value = "";
       }
 
-      if (previewUrlRef.current) {
-        URL.revokeObjectURL(previewUrlRef.current);
-        previewUrlRef.current = null;
-      }
-
-      setUploadStatus("Your photograph has been uploaded successfully.");
+      setUploadStatus(
+        "Your photograph has been uploaded successfully."
+      );
 
       setToast({
         message: "Photo uploaded successfully!",
@@ -211,7 +290,8 @@ export default function AddPictureContent() {
     }
   }
 
-  const labelClass = "text-sm font-semibold text-gray-800";
+  const labelClass =
+    "text-sm font-semibold text-gray-800";
 
   return (
     <div className="min-h-screen bg-[#f7f8fa] font-sans text-gray-800">
@@ -221,14 +301,16 @@ export default function AddPictureContent() {
           role="status"
           aria-live="polite"
           className={`fixed right-4 top-5 z-50 flex max-w-sm items-start gap-3 rounded-xl px-5 py-4 text-sm font-medium text-white shadow-xl ${
-            toast.type === "success" ? "bg-green-700" : "bg-red-600"
+            toast.type === "success"
+              ? "bg-green-700"
+              : "bg-red-600"
           }`}
         >
           <span aria-hidden="true" className="text-lg">
             {toast.type === "success" ? "✓" : "!"}
           </span>
 
-          <span>{toast.message}</span>
+          <span className="break-words">{toast.message}</span>
 
           <button
             type="button"
@@ -254,7 +336,10 @@ export default function AddPictureContent() {
               Steps to Apply
             </h2>
 
-            <nav aria-label="Application steps" className="space-y-1.5">
+            <nav
+              aria-label="Application steps"
+              className="space-y-1.5"
+            >
               {navigationItems.map((item) => {
                 const active = item.href === "/add-pic";
 
@@ -308,20 +393,27 @@ export default function AddPictureContent() {
                   <p className="mb-2 font-bold text-blue-900">
                     ضروری ہدایات:
                   </p>
+
                   <p>
                     نمبر1: تصویر کو پہلے 200×200 سائز میں کرلیں جس میں
                     آپکا چہرہ واضح نظر آئے۔
                   </p>
+
                   <p>
                     نمبر2: صرف فرنٹ پوز میں کھینچی گئی واضح تصویر اپلوڈ
                     کریں۔
                   </p>
+
                   <p>نمبر3: تین ماہ سے زیادہ پُرانی تصویر نہ ہو۔</p>
+
                   <p>نمبر4: ماسک یا نقاب والی تصاویر قابل قبول نہیں۔</p>
                 </div>
 
                 <div className="mt-6">
-                  <label htmlFor="photoUpload" className={labelClass}>
+                  <label
+                    htmlFor="photoUpload"
+                    className={labelClass}
+                  >
                     Select Photograph
                   </label>
 
@@ -330,15 +422,15 @@ export default function AddPictureContent() {
                     id="photoUpload"
                     name="photo"
                     type="file"
-                    accept="image/*"
+                    accept="image/jpeg,image/png,image/webp"
                     onChange={handleFileChange}
                     disabled={!isReady || isUploading}
                     className="mt-2 block w-full cursor-pointer rounded-lg border border-gray-300 bg-white text-sm text-gray-700 file:mr-4 file:border-0 file:bg-gray-100 file:px-4 file:py-3 file:text-sm file:font-semibold file:text-gray-700 hover:file:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <p className="mt-2 text-xs leading-5 text-gray-500">
-                    Choose an image file. A preview will appear before
-                    uploading.
+                    Supported formats: JPG, PNG and WebP. Maximum
+                    file size: 5 MB.
                   </p>
                 </div>
 
@@ -384,7 +476,7 @@ export default function AddPictureContent() {
                     <img
                       id="previewImage"
                       src={previewImage}
-                      alt="Uploaded Photo Preview"
+                      alt="Profile photograph preview"
                       className="max-h-[250px] w-full rounded-lg object-contain"
                     />
                   ) : (
@@ -392,9 +484,11 @@ export default function AddPictureContent() {
                       <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-gray-200 text-3xl text-gray-500">
                         ♙
                       </div>
+
                       <p className="text-sm font-medium text-gray-600">
                         No photograph selected
                       </p>
+
                       <p className="mt-1 text-xs text-gray-400">
                         Your photo preview will appear here.
                       </p>
@@ -410,9 +504,9 @@ export default function AddPictureContent() {
             </div>
 
             <div className="mt-8 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
-              <strong>Important:</strong> Your photograph is sent to the
-              backend only when you click Upload Photo. The preview alone
-              does not upload or save the file.
+              <strong>Important:</strong> Your photograph is uploaded
+              to the backend only when you click Upload Photo. The
+              preview alone does not upload or save the file.
             </div>
           </section>
         </div>
