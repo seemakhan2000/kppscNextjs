@@ -1,60 +1,27 @@
 
-const express = require('express');
+const express = require("express");
+const upload = require("../middleware/upload");
+const controller = require("../controllers/advertismentController");
+
 const router = express.Router();
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const advertismentController = require('../controllers/advertismentController');
 
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    let base = path.join(__dirname, '../public/ads');
-    let folder;
-
-    if (file.mimetype === 'application/pdf') {
-      folder = path.join(base, 'pdfs');
-    } else if (file.mimetype.startsWith('image/')) {
-      folder = path.join(base, 'images');
-    } else {
-      return cb(new Error('Unsupported file type'), false);
+const uploadAdFiles = (req, res, next) => {
+  upload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "pdf", maxCount: 1 },
+  ])(req, res, (error) => {
+    if (error) {
+      return res.status(400).json({ message: error.message });
     }
 
-    fs.mkdirSync(folder, { recursive: true });
-    cb(null, folder);
-  },
-  filename: function (req, file, cb) {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
-  },
-});
+    next();
+  });
+};
 
-const upload = multer({
-  storage,
-  limits: { fileSize: 15 * 1024 * 1024 }, 
-});
-
-router.get('/', advertismentController.getAds);
-router.get('/:id', advertismentController.getAdById);
-
-router.post(
-  '/',
-  upload.fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'pdf', maxCount: 1 },
-  ]),
-  advertismentController.createAd
-);
-
-router.put(
-  '/:id',
-  upload.fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'pdf', maxCount: 1 },
-  ]),
-  advertismentController.updateAd
-);
-
-router.delete('/:id', advertismentController.deleteAd);
+router.get("/", controller.getAds);
+router.get("/:id", controller.getAdById);
+router.post("/", uploadAdFiles, controller.createAd);
+router.put("/:id", uploadAdFiles, controller.updateAd);
+router.delete("/:id", controller.deleteAd);
 
 module.exports = router;

@@ -1,218 +1,228 @@
 
+const crypto = require("crypto");
 const Advertisement = require("../models/advertisnment");
+const { uploadBuffer, deleteAsset } = require("../config/cloudinary");
 
-// Helper: Parse and validate a date
-function parseDate(value) {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
+const parseDate = (value) => {
+  if (!value) return null;
 
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) {
     throw new Error("Invalid start date or end date.");
   }
 
   return date;
-}
+};
 
-// GET all advertisements
-exports.getAds = async (req, res) => {
+const uploadAdFile = (file, type) =>
+  uploadBuffer(file.buffer, {
+    folder: type === "pdf" ? "kppsc/ads/pdfs" : "kppsc/ads/images",
+    resourceType: type === "pdf" ? "raw" : "image",
+    publicId: `${type}-${Date.now()}-${crypto.randomUUID()}${type === "pdf" ? ".pdf" : ""}`,
+  });
+
+const cleanupUploads = async (uploads) => {
+  for (const item of uploads) {
+    if (!item?.publicId) continue;
+
+    try {
+      await deleteAsset(item.publicId, item.resourceType);
+    } catch (error) {
+      console.error("Cloudinary cleanup failed:", error.message);
+    }
+  }
+};
+
+exports.getAds = async (_req, res) => {
   try {
     const ads = await Advertisement.find().sort({ createdAt: -1 });
     return res.status(200).json(ads);
   } catch (error) {
-    console.error("getAds error:", error);
-
-    return res.status(500).json({
-      message: "Failed to fetch advertisements",
-    });
+    console.error("getAds:", error);
+    return res.status(500).json({ message: "Failed to fetch advertisements." });
   }
 };
 
-// GET advertisement by ID
 exports.getAdById = async (req, res) => {
   try {
     const ad = await Advertisement.findById(req.params.id);
 
     if (!ad) {
-      return res.status(404).json({
-        message: "Advertisement not found",
-      });
+      return res.status(404).json({ message: "Advertisement not found." });
     }
 
     return res.status(200).json(ad);
   } catch (error) {
-    console.error("getAdById error:", error);
-
-    return res.status(500).json({
-      message: "Failed to fetch advertisement",
-    });
+    console.error("getAdById:", error);
+    return res.status(500).json({ message: "Failed to fetch advertisement." });
   }
 };
 
-// CREATE advertisement
 exports.createAd = async (req, res) => {
-  try {
-    console.log("Create advertisement req.body:", req.body);
+  const uploaded = [];
 
+  try {
     const { title, description, startDate, endDate } = req.body;
 
     if (!title?.trim() || !description?.trim()) {
       return res.status(400).json({
-        message: "Title and description are required",
-      });
-    }
-
-    if (!startDate || !endDate) {
-      return res.status(400).json({
-        message: "Start date and end date are required",
+        message: "Title and description are required.",
       });
     }
 
     const parsedStartDate = parseDate(startDate);
     const parsedEndDate = parseDate(endDate);
 
-    if (parsedEndDate < parsedStartDate) {
+    if (!parsedStartDate || !parsedEndDate) {
       return res.status(400).json({
-        message: "End date and time cannot be before start date and time",
+        message: "Start date and end date are required.",
       });
     }
 
-    const image = req.files?.image?.[0]
-      ? `/ads/images/${req.files.image[0].filename}`
-      : null;
+    if (parsedEndDate < parsedStartDate) {
+      return res.status(400).json({
+        message: "End date cannot be before start date.",
+      });
+    }
 
-    const pdf = req.files?.pdf?.[0]
-      ? `/ads/pdfs/${req.files.pdf[0].filename}`
-      : null;
+    const imageFile = req.files?.image?.[0];
+    const pdfFile = req.files?.pdf?.[0];
+
+    const image = imageFile ? await uploadAdFile(imageFile, "image") : null;
+    if (image) uploaded.push({ ...image, resourceType: "image" });
+
+    const pdf = pdfFile ? await uploadAdFile(pdfFile, "pdf") : null;
+    if (pdf) uploaded.push({ ...pdf, resourceType: "raw" });
 
     const ad = await Advertisement.create({
       title: title.trim(),
       description: description.trim(),
       startDate: parsedStartDate,
       endDate: parsedEndDate,
-      image,
-      pdf,
-    });
-
-    console.log("Saved advertisement dates:", {
-      startDate: ad.startDate,
-      endDate: ad.endDate,
+      image: image?.url || null,
+      imagePublicId: image?.publicId || "",
+      pdf: pdf?.url || null,
+      pdfPublicId: pdf?.publicId || "",
     });
 
     return res.status(201).json(ad);
   } catch (error) {
-    console.error("createAd error:", error);
+    console.error("createAd:", error);
+    await cleanupUploads(uploaded);
 
     return res.status(400).json({
-      message: error.message || "Failed to create advertisement",
+      message: error.message || "Failed to create advertisement.",
     });
   }
 };
 
-// UPDATE advertisement
 exports.updateAd = async (req, res) => {
+  const uploaded = [];
+
   try {
-    const { title, description, startDate, endDate } = req.body;
+    const ad = await Advertisement.findById(req.params.id);
 
-    const existingAd = await Advertisement.findById(req.params.id);
-
-    if (!existingAd) {
-      return res.status(404).json({
-        message: "Advertisement not found",
-      });
+    if (!ad) {
+      return res.status(404).json({ message: "Advertisement not found." });
     }
+
+    const { title, description, startDate, endDate } = req.body;
 
     if (title !== undefined) {
       if (!title.trim()) {
-        return res.status(400).json({
-          message: "Advertisement title is required",
-        });
+        return res.status(400).json({ message: "Title is required." });
       }
-
-      existingAd.title = title.trim();
+      ad.title = title.trim();
     }
 
     if (description !== undefined) {
       if (!description.trim()) {
-        return res.status(400).json({
-          message: "Advertisement description is required",
-        });
+        return res.status(400).json({ message: "Description is required." });
       }
-
-      existingAd.description = description.trim();
+      ad.description = description.trim();
     }
 
-    const nextStartDate =
-      startDate !== undefined
-        ? parseDate(startDate)
-        : existingAd.startDate;
+    const nextStart = startDate !== undefined ? parseDate(startDate) : ad.startDate;
+    const nextEnd = endDate !== undefined ? parseDate(endDate) : ad.endDate;
 
-    const nextEndDate =
-      endDate !== undefined
-        ? parseDate(endDate)
-        : existingAd.endDate;
-
-    if (!nextStartDate || !nextEndDate) {
+    if (!nextStart || !nextEnd) {
       return res.status(400).json({
-        message: "Start date and end date are required",
+        message: "Start date and end date are required.",
       });
     }
 
-    if (nextEndDate < nextStartDate) {
+    if (nextEnd < nextStart) {
       return res.status(400).json({
-        message: "End date and time cannot be before start date and time",
+        message: "End date cannot be before start date.",
       });
     }
 
-    existingAd.startDate = nextStartDate;
-    existingAd.endDate = nextEndDate;
+    ad.startDate = nextStart;
+    ad.endDate = nextEnd;
+
+    const oldAssets = [];
 
     if (req.files?.image?.[0]) {
-      existingAd.image = `/ads/images/${req.files.image[0].filename}`;
+      const image = await uploadAdFile(req.files.image[0], "image");
+      uploaded.push({ ...image, resourceType: "image" });
+
+      if (ad.imagePublicId) {
+        oldAssets.push({ publicId: ad.imagePublicId, resourceType: "image" });
+      }
+
+      ad.image = image.url;
+      ad.imagePublicId = image.publicId;
     }
 
     if (req.files?.pdf?.[0]) {
-      existingAd.pdf = `/ads/pdfs/${req.files.pdf[0].filename}`;
+      const pdf = await uploadAdFile(req.files.pdf[0], "pdf");
+      uploaded.push({ ...pdf, resourceType: "raw" });
+
+      if (ad.pdfPublicId) {
+        oldAssets.push({ publicId: ad.pdfPublicId, resourceType: "raw" });
+      }
+
+      ad.pdf = pdf.url;
+      ad.pdfPublicId = pdf.publicId;
     }
 
-    await existingAd.save();
+    await ad.save();
 
-    console.log("Updated advertisement dates:", {
-      startDate: existingAd.startDate,
-      endDate: existingAd.endDate,
-    });
+    await cleanupUploads(oldAssets);
 
-    return res.status(200).json(existingAd);
+    return res.status(200).json(ad);
   } catch (error) {
-    console.error("updateAd error:", error);
+    console.error("updateAd:", error);
+    await cleanupUploads(uploaded);
 
     return res.status(400).json({
-      message: error.message || "Failed to update advertisement",
+      message: error.message || "Failed to update advertisement.",
     });
   }
 };
 
-// DELETE advertisement
 exports.deleteAd = async (req, res) => {
   try {
-    const ad = await Advertisement.findByIdAndDelete(req.params.id);
+    const ad = await Advertisement.findById(req.params.id);
 
     if (!ad) {
-      return res.status(404).json({
-        message: "Advertisement not found",
-      });
+      return res.status(404).json({ message: "Advertisement not found." });
     }
 
+    await ad.deleteOne();
+
+    await cleanupUploads([
+      { publicId: ad.imagePublicId, resourceType: "image" },
+      { publicId: ad.pdfPublicId, resourceType: "raw" },
+    ]);
+
     return res.status(200).json({
-      message: "Advertisement deleted successfully",
+      message: "Advertisement deleted successfully.",
     });
   } catch (error) {
-    console.error("deleteAd error:", error);
-
+    console.error("deleteAd:", error);
     return res.status(500).json({
-      message: "Failed to delete advertisement",
+      message: "Failed to delete advertisement.",
     });
   }
 };

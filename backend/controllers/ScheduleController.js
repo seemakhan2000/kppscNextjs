@@ -1,75 +1,113 @@
-const fs = require("fs");
-const path = require("path");
-const mongoose = require("mongoose");
-const Schedule = require("../models/Schedule");
 
-const removeFile = (relativePath) => {
-  if (!relativePath) return;
-  fs.unlink(path.join(__dirname, "..", relativePath), () => {});
-};
+const mongoose = require("mongoose");
+const crypto = require("crypto");
+const Schedule = require("../models/Schedule");
+const { uploadBuffer, deleteAsset } = require("../config/cloudinary");
 
 const validate = ({ post, applicationStart, applicationEnd, examDate }) => {
-  if (!post || !String(post).trim()) return "Post / Exam name is required.";
+  if (!post || !String(post).trim()) {
+    return "Post / Exam name is required.";
+  }
 
   const start = new Date(applicationStart);
   const end = new Date(applicationEnd);
   const exam = new Date(examDate);
 
-  if ([start, end, exam].some((d) => Number.isNaN(d.getTime()))) {
+  if ([start, end, exam].some((date) => Number.isNaN(date.getTime()))) {
     return "Please provide valid dates.";
   }
-  if (end < start) return "Application end date cannot be before start date.";
-  if (exam < end) return "Exam date cannot be before application end date.";
+
+  if (end < start) {
+    return "Application end date cannot be before start date.";
+  }
+
+  if (exam < end) {
+    return "Exam date cannot be before application end date.";
+  }
+
   return null;
 };
 
-// GET /api/schedules  (public)
+const uploadSchedulePdf = (file) =>
+  uploadBuffer(file.buffer, {
+    folder: "kppsc/schedules",
+    resourceType: "raw",
+    publicId: `schedule-${Date.now()}-${crypto.randomUUID()}.pdf`,
+  });
+
 exports.getSchedules = async (_req, res) => {
   try {
     const data = await Schedule.find().sort({ examDate: 1 }).lean();
-    res.json({ success: true, data });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Failed to fetch schedules." });
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error("getSchedules:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch schedules.",
+    });
   }
 };
 
-// POST /api/schedules  (admin)
 exports.createSchedule = async (req, res) => {
   const error = validate(req.body);
+
   if (error) {
-    if (req.file) removeFile(`uploads/schedules/${req.file.filename}`);
     return res.status(400).json({ success: false, message: error });
   }
 
+  let uploaded = null;
+
   try {
+    if (req.file) uploaded = await uploadSchedulePdf(req.file);
+
     const schedule = await Schedule.create({
-      post: req.body.post.trim(),
+      post: String(req.body.post).trim(),
       applicationStart: req.body.applicationStart,
       applicationEnd: req.body.applicationEnd,
       examDate: req.body.examDate,
-      pdf: req.file ? `uploads/schedules/${req.file.filename}` : "",
+      pdf: uploaded?.url || "",
+      pdfPublicId: uploaded?.publicId || "",
     });
-    res.status(201).json({ success: true, data: schedule });
-  } catch (err) {
-    console.error(err);
-    if (req.file) removeFile(`uploads/schedules/${req.file.filename}`);
-    res.status(500).json({ success: false, message: "Failed to create schedule." });
+
+    return res.status(201).json({ success: true, data: schedule });
+  } catch (error) {
+    console.error("createSchedule:", error);
+
+    if (uploaded?.publicId) {
+      try {
+        await deleteAsset(uploaded.publicId, "raw");
+      } catch (cleanupError) {
+        console.error("PDF cleanup failed:", cleanupError.message);
+      }
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create schedule.",
+    });
   }
 };
 
-// PUT /api/schedules/:id  (admin)
 exports.updateSchedule = async (req, res) => {
   const { id } = req.params;
+
   if (!mongoose.isValidObjectId(id)) {
-    return res.status(400).json({ success: false, message: "Invalid schedule id." });
+    return res.status(400).json({
+      success: false,
+      message: "Invalid schedule id.",
+    });
   }
+
+  let uploaded = null;
 
   try {
     const schedule = await Schedule.findById(id);
+
     if (!schedule) {
-      if (req.file) removeFile(`uploads/schedules/${req.file.filename}`);
-      return res.status(404).json({ success: false, message: "Schedule not found." });
+      return res.status(404).json({
+        success: false,
+        message: "Schedule not found.",
+      });
     }
 
     const merged = {
@@ -80,42 +118,94 @@ exports.updateSchedule = async (req, res) => {
     };
 
     const error = validate(merged);
+
     if (error) {
-      if (req.file) removeFile(`uploads/schedules/${req.file.filename}`);
       return res.status(400).json({ success: false, message: error });
     }
 
-    Object.assign(schedule, merged, { post: String(merged.post).trim() });
+    if (req.file) uploaded = await uploadSchedulePdf(req.file);
 
-    if (req.file) {
-      removeFile(schedule.pdf);
-      schedule.pdf = `uploads/schedules/${req.file.filename}`;
+    const oldPublicId = schedule.pdfPublicId;
+
+    schedule.post = String(merged.post).trim();
+    schedule.applicationStart = merged.applicationStart;
+    schedule.applicationEnd = merged.applicationEnd;
+    schedule.examDate = merged.examDate;
+
+    if (uploaded) {
+      schedule.pdf = uploaded.url;
+      schedule.pdfPublicId = uploaded.publicId;
     }
 
     await schedule.save();
-    res.json({ success: true, data: schedule });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Failed to update schedule." });
+
+    if (uploaded && oldPublicId) {
+      try {
+        await deleteAsset(oldPublicId, "raw");
+      } catch (cleanupError) {
+        console.error("Old schedule PDF cleanup failed:", cleanupError.message);
+      }
+    }
+
+    return res.json({ success: true, data: schedule });
+  } catch (error) {
+    console.error("updateSchedule:", error);
+
+    if (uploaded?.publicId) {
+      try {
+        await deleteAsset(uploaded.publicId, "raw");
+      } catch (cleanupError) {
+        console.error("New PDF cleanup failed:", cleanupError.message);
+      }
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update schedule.",
+    });
   }
 };
 
-
 exports.deleteSchedule = async (req, res) => {
   const { id } = req.params;
+
   if (!mongoose.isValidObjectId(id)) {
-    return res.status(400).json({ success: false, message: "Invalid schedule id." });
+    return res.status(400).json({
+      success: false,
+      message: "Invalid schedule id.",
+    });
   }
 
   try {
-    const schedule = await Schedule.findByIdAndDelete(id);
+    const schedule = await Schedule.findById(id);
+
     if (!schedule) {
-      return res.status(404).json({ success: false, message: "Schedule not found." });
+      return res.status(404).json({
+        success: false,
+        message: "Schedule not found.",
+      });
     }
-    removeFile(schedule.pdf);
-    res.json({ success: true, data: null, message: "Schedule deleted." });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Failed to delete schedule." });
+
+    await schedule.deleteOne();
+
+    if (schedule.pdfPublicId) {
+      try {
+        await deleteAsset(schedule.pdfPublicId, "raw");
+      } catch (cleanupError) {
+        console.error("Schedule PDF cleanup failed:", cleanupError.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: null,
+      message: "Schedule deleted.",
+    });
+  } catch (error) {
+    console.error("deleteSchedule:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete schedule.",
+    });
   }
 };
