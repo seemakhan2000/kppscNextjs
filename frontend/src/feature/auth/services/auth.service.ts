@@ -1,3 +1,4 @@
+
 import type {
   ApiResponse,
   LoginFormData,
@@ -5,7 +6,7 @@ import type {
 } from "../types/auth.types";
 
 const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000"
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"
 ).replace(/\/+$/, "");
 
 async function postRequest<T>(
@@ -16,6 +17,7 @@ async function postRequest<T>(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json",
     },
     body: JSON.stringify(payload),
   });
